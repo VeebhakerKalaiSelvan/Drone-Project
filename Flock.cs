@@ -1,125 +1,163 @@
-using System;
-public class Flock
+﻿using System.Collections;
+using System.Collections.Generic;
+using System.Diagnostics; // For the Stopwatch
+using UnityEngine;
+using UnityEngine.UI; // For the UI Text component
+
+public class Flock : MonoBehaviour
 {
-    Drone[] agents;
-    int num;
-    
-    public Flock(int maxnum)
+    public FlockAgent agentPrefab;
+    List<FlockAgent> agents = new List<FlockAgent>();
+    public FlockBehavior behavior;
+
+    [Range(10, 500)]
+    public int startingCount = 250;
+    const float AgentDensity = 0.08f;
+
+    [Range(1f, 100f)]
+    public float driveFactor = 10f;
+    [Range(1f, 100f)]
+    public float maxSpeed = 5f;
+    [Range(1f, 10f)]
+    public float neighborRadius = 1.5f;
+    [Range(0f, 1f)]
+    public float avoidanceRadiusMultiplier = 0.5f;
+
+    float squareMaxSpeed;
+    float squareNeighborRadius;
+    float squareAvoidanceRadius;
+    public float SquareAvoidanceRadius { get { return squareAvoidanceRadius; } }
+
+    // Victim locations and status
+    List<Vector3> victimLocations = new List<Vector3>();
+    List<bool> victimFoundStatus = new List<bool>(); // Keeps track of whether a victim location is occupied
+
+    private Stopwatch stopwatch; // For measuring the execution time of the function
+    private long totalExecutionTime = 0; // Sum of all execution times
+    private int frameCount = 0; // Number of frames over which we're measuring
+
+    void Start()
     {
-        agents = new Drone[maxnum];
-    }
-    
-    // actually add the drones
-    public void Init(int num)
-    {
-        this.num = num;
-        for (int i=0; i<num; i++)
+        squareMaxSpeed = maxSpeed * maxSpeed;
+        squareNeighborRadius = neighborRadius * neighborRadius;
+        squareAvoidanceRadius = squareNeighborRadius * avoidanceRadiusMultiplier * avoidanceRadiusMultiplier;
+
+        stopwatch = new Stopwatch(); // Initialize the stopwatch
+        GenerateVictimLocations();
+
+        for (int i = 0; i < startingCount; i++)
         {
-            agents[i] = new Drone(i);
-        }
-    }
-    
-    public void Update()
-    {
-        for (int i=0; i<num; i++)
-        {
-            agents[i].Update();
+            FlockAgent newAgent = Instantiate(
+                agentPrefab,
+                Random.insideUnitCircle * startingCount * AgentDensity,
+                Quaternion.Euler(Vector3.forward * Random.Range(0f, 360f)),
+                transform
+            );
+            newAgent.name = "Agent " + i;
+            newAgent.Initialize(this);
+            agents.Add(newAgent);
         }
     }
 
-    // Function to calculate average (battery, temperature, wind)
-    public float average(string option) 
+    void GenerateVictimLocations()
     {
-        float sum = 0;
-        for (int i = 0; i < num; i++)
+        int numberOfVictims = Mathf.CeilToInt(startingCount * 0.1f); // Set number of victims to 10% of the number of drones
+        victimLocations.Clear();
+        victimFoundStatus.Clear();
+
+        for (int i = 0; i < numberOfVictims; i++)
         {
-            if (option == "battery")
-                sum += agents[i].Battery;
-            else if (option == "temperature")
-                sum += agents[i].Temperature;
-            else if (option == "wind")
-                sum += agents[i].Wind;
+            Vector3 randomPosition = new Vector3(
+                Random.Range(-50f, 50f), // X position within scene bounds
+                Random.Range(-50f, 50f), // Y position within scene bounds
+                0f
+            );
+            victimLocations.Add(randomPosition);
+            victimFoundStatus.Add(false); // Initially, no victim location is occupied
         }
-
-        float aver = sum / num;
-        return aver;
     }
-
-    // Function to find max (battery, temperature, wind)
-    public float max(string option)
+    
+    void Update()
     {
-        float maxValue = option == "battery" ? agents[0].Battery : option == "temperature" ? agents[0].Temperature : agents[0].Wind;
+        stopwatch.Reset();
+        stopwatch.Start();
         
-        for (int i = 1; i < num; i++)
+        PartitionDronesBasedOnVictims();
+        stopwatch.Stop();
+        // Accumulate the total execution time and increase frame count
+        totalExecutionTime += stopwatch.ElapsedMilliseconds;
+        frameCount++;
+
+        // Calculate and display the average execution time in the console every 60 frames
+        if (frameCount % 60 == 0) // Display every 60 frames (1 second if running at 60 FPS)
         {
-            float value = option == "battery" ? agents[i].Battery : option == "temperature" ? agents[i].Temperature : agents[i].Wind;
-
-            if (value > maxValue)
-            {
-                maxValue = value;
-            }
+            float averageTime = (float)totalExecutionTime / frameCount;
+            UnityEngine.Debug.Log($"Average Partition Function Time: {averageTime:F2} ms over {frameCount} frames");
         }
-        return maxValue;
-    }
 
-    // Function to find min (battery, temperature, wind)
-    public float min(string option)
-    {
-        float minValue = option == "battery" ? agents[0].Battery : option == "temperature" ? agents[0].Temperature : agents[0].Wind;
+
+        foreach (FlockAgent agent in agents)
+        {
+            List<Transform> context = GetNearbyObjects(agent);
+            Vector2 move = behavior.CalculateMove(agent, context, this);
+            move *= driveFactor;
+            if (move.sqrMagnitude > squareMaxSpeed)
+            {
+                move = move.normalized * maxSpeed;
+            }
+            agent.Move(move);
+        }
+
         
-        for (int i = 1; i < num; i++)
-        {
-            float value = option == "battery" ? agents[i].Battery : option == "temperature" ? agents[i].Temperature : agents[i].Wind;
-
-            if (value < minValue)
-            {
-                minValue = value;
-            }
-        }
-        return minValue;
     }
 
-    // Function to print drone details by ID
-    public void print(int droneID)
+    private void PartitionDronesBasedOnVictims()
     {
-        Drone foundDrone = null;
-        for (int i = 0; i < num; i++)
-        {
-            if (agents[i].ID == droneID)
-            {
-                foundDrone = agents[i];
-                break;
-            }
-        }
-
-        if (foundDrone != null)
-        {
-            Console.WriteLine($"Drone ID: {foundDrone.ID}, Battery: {foundDrone.Battery}, Temperature: {foundDrone.Temperature}, Wind: {foundDrone.Wind}");
-        }
-        else
-        {
-            Console.WriteLine($"Drone with ID {droneID} not found.");
-        }
-    }
-
-    // Bubble sort based on battery, temperature, or wind
-    public void bubblesort(string option)
+    foreach (FlockAgent agent in agents)
     {
-        for (int i = 0; i < num - 1; i++)
+        // Only consider drones that have not already found a victim
+        if (!agent.HasFoundVictim)
         {
-            for (int j = 0; j < num - i - 1; j++)
+            bool foundVictim = false;
+            
+            // Iterate through each victim location to find an available victim
+            for (int i = 0; i < victimLocations.Count; i++)
             {
-                float current = option == "battery" ? agents[j].Battery : option == "temperature" ? agents[j].Temperature : agents[j].Wind;
-                float next = option == "battery" ? agents[j + 1].Battery : option == "temperature" ? agents[j + 1].Temperature : agents[j + 1].Wind;
-
-                if (current > next)
+                // Check if the victim has not been found by another drone
+                if (!victimFoundStatus[i] && Vector3.Distance(agent.transform.position, victimLocations[i]) < neighborRadius)
                 {
-                    // Swap drones
-                    Drone temp = agents[j];
-                    agents[j] = agents[j + 1];
-                    agents[j + 1] = temp;
+                    // Mark the victim as found and stop the drone at the victim's location
+                    agent.VictimsFound += 1;
+                    agent.HasFoundVictim = true;
+                    agent.GetComponentInChildren<SpriteRenderer>().color = Color.red; // Change drone color to indicate it found a victim
+                    agent.transform.position = victimLocations[i]; // Ensure the drone stops at the victim's location
+
+                    victimFoundStatus[i] = true; // Mark this victim location as occupied
+                    foundVictim = true;
+                    break; // Exit the loop once a victim is found
                 }
             }
+
+            // If no victim is found, keep the drone moving normally
+            if (!foundVictim)
+            {
+                agent.GetComponentInChildren<SpriteRenderer>().color = Color.white; // Normal drone color
+            }
         }
+    }
+    }
+
+    List<Transform> GetNearbyObjects(FlockAgent agent)
+    {
+        List<Transform> context = new List<Transform>();
+        Collider2D[] contextColliders = Physics2D.OverlapCircleAll(agent.transform.position, neighborRadius);
+        foreach (Collider2D c in contextColliders)
+        {
+            if (c != agent.AgentCollider)
+            {
+                context.Add(c.transform);
+            }
+        }
+        return context;
     }
 }
